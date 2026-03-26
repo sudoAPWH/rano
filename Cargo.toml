@@ -1,0 +1,39 @@
+[package]
+name = "rano"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust rewrite of GNU nano - a small and user-friendly text editor"
+
+[dependencies]
+crossterm = "0.28"
+regex = "1"
+bitflags = "2"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+signal-hook = "0.3"
+dirs = "6"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+
+[features]
+default = ["browser", "color", "comment", "extra", "formatter", "help",
+           "histories", "justify", "linter", "mouse", "multibuffer",
+           "operatingdir", "speller", "tabcomp", "wordcompletion", "wrapping"]
+tiny = []
+browser = []
+color = []
+comment = []
+extra = []
+formatter = []
+help = []
+histories = []
+justify = []
+linter = []
+mouse = []
+multibuffer = []
+operatingdir = []
+speller = []
+tabcomp = []
+wordcompletion = []
+wrapping = []
+

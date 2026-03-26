@@ -1,0 +1,214 @@
+/// Cut, copy, and paste operations. Port of nano's cut.c.
+
+use crate::chars;
+use crate::definitions::*;
+use crate::editor::Editor;
+
+impl Editor {
+    /// Cut the current line (or marked region) into the cutbuffer.
+    pub fn cut_text(&mut self) {
+        if self.flags.contains(EditorFlags::VIEW_MODE) {
+            self.statusline(MessageType::Ahem, "Key invalid in view mode");
+            return;
+        }
+
+        let buf = &self.buffers[self.current_buf];
+        // Check if there's anything to cut
+        if buf.current >= buf.lines.len() - 1 && buf.lines[buf.current].data.is_empty() && buf.mark.is_none() {
+            self.statusline(MessageType::Ahem, "Nothing was cut");
+            return;
+        }
+
+        if !self.keep_cutbuffer {
+            self.cutbuffer.clear();
+        }
+
+        let buf = &self.buffers[self.current_buf];
+        if let Some(mark_line) = buf.mark {
+            // Cut the marked region
+            let (top, top_x, bot, bot_x) = if mark_line < buf.current
+                || (mark_line == buf.current && buf.mark_x <= buf.current_x)
+            {
+                (mark_line, buf.mark_x, buf.current, buf.current_x)
+            } else {
+                (buf.current, buf.current_x, mark_line, buf.mark_x)
+            };
+
+            self.cut_region(top, top_x, bot, bot_x);
+            self.current_buffer_mut().mark = None;
+            self.keep_cutbuffer = false;
+        } else {
+            // Cut the entire current line
+            let current = self.current_buffer().current;
+            let line_count = self.current_buffer().lines.len();
+
+            if current < line_count - 1 {
+                let cut_line = self.current_buffer().lines[current].clone();
+                self.cutbuffer.push(cut_line);
+                self.cutbuffer.push(Line::new(String::new(), 0));
+                self.current_buffer_mut().lines.remove(current);
+                if self.current_buffer().current >= self.current_buffer().lines.len() {
+                    self.current_buffer_mut().current = self.current_buffer().lines.len() - 1;
+                }
+                self.current_buffer_mut().current_x = 0;
+            } else {
+                // Last line: cut content but leave empty line
+                let cut_line = self.current_buffer().lines[current].clone();
+                self.cutbuffer.push(cut_line);
+                self.current_buffer_mut().lines[current].data.clear();
+                self.current_buffer_mut().current_x = 0;
+            }
+
+            self.current_buffer_mut().renumber_from(current);
+            self.keep_cutbuffer = true;
+        }
+
+        self.set_modified();
+        self.confirm_margin();
+        self.refresh_needed = true;
+    }
+
+    /// Cut a region from (top, top_x) to (bot, bot_x).
+    fn cut_region(&mut self, top: usize, top_x: usize, bot: usize, bot_x: usize) {
+        if top == bot {
+            // Single line region
+            let extracted = self.buffers[self.current_buf].lines[top].data[top_x..bot_x].to_string();
+            self.cutbuffer.push(Line::new(extracted, 0));
+            self.buffers[self.current_buf].lines[top].data.drain(top_x..bot_x);
+            self.buffers[self.current_buf].current = top;
+            self.buffers[self.current_buf].current_x = top_x;
+        } else {
+            // Multi-line region
+            // First line: take from top_x to end
+            let first_part = self.buffers[self.current_buf].lines[top].data[top_x..].to_string();
+            self.cutbuffer.push(Line::new(first_part, 0));
+
+            // Middle lines: take entirely
+            for i in (top + 1)..bot {
+                self.cutbuffer.push(self.buffers[self.current_buf].lines[i].clone());
+            }
+
+            // Last line: take from start to bot_x
+            let last_part = self.buffers[self.current_buf].lines[bot].data[..bot_x].to_string();
+            self.cutbuffer.push(Line::new(last_part, 0));
+
+            // Merge top line's before-portion with bot line's after-portion
+            let after_bot = self.buffers[self.current_buf].lines[bot].data[bot_x..].to_string();
+            self.buffers[self.current_buf].lines[top].data.truncate(top_x);
+            self.buffers[self.current_buf].lines[top].data.push_str(&after_bot);
+
+            // Remove lines from top+1 through bot
+            for _ in (top + 1)..=bot {
+                self.buffers[self.current_buf].lines.remove(top + 1);
+            }
+
+            self.buffers[self.current_buf].current = top;
+            self.buffers[self.current_buf].current_x = top_x;
+            self.buffers[self.current_buf].renumber_from(top);
+        }
+    }
+
+    /// Copy the current line (or marked region) into the cutbuffer.
+    pub fn copy_text(&mut self) {
+        self.cutbuffer.clear();
+
+        let buf = &self.buffers[self.current_buf];
+
+        if let Some(mark_line) = buf.mark {
+            let (top, top_x, bot, bot_x) = if mark_line < buf.current
+                || (mark_line == buf.current && buf.mark_x <= buf.current_x)
+            {
+                (mark_line, buf.mark_x, buf.current, buf.current_x)
+            } else {
+                (buf.current, buf.current_x, mark_line, buf.mark_x)
+            };
+
+            if top == bot && top_x == bot_x {
+                self.statusline(MessageType::Ahem, "Copied nothing");
+                return;
+            }
+
+            // Copy the region without modifying the buffer
+            if top == bot {
+                let text = buf.lines[top].data[top_x..bot_x].to_string();
+                self.cutbuffer.push(Line::new(text, 0));
+            } else {
+                self.cutbuffer.push(Line::new(buf.lines[top].data[top_x..].to_string(), 0));
+                for i in (top + 1)..bot {
+                    self.cutbuffer.push(buf.lines[i].clone());
+                }
+                self.cutbuffer.push(Line::new(buf.lines[bot].data[..bot_x].to_string(), 0));
+            }
+
+            self.current_buffer_mut().mark = None;
+        } else {
+            // Copy the current line
+            let current = buf.current;
+            self.cutbuffer.push(buf.lines[current].clone());
+            self.cutbuffer.push(Line::new(String::new(), 0));
+        }
+
+        self.statusline(MessageType::Info, "Copied text");
+        self.refresh_needed = true;
+    }
+
+    /// Paste the cutbuffer contents at the cursor position.
+    pub fn paste_text(&mut self) {
+        if self.flags.contains(EditorFlags::VIEW_MODE) {
+            self.statusline(MessageType::Ahem, "Key invalid in view mode");
+            return;
+        }
+
+        if self.cutbuffer.is_empty() {
+            self.statusline(MessageType::Ahem, "Cutbuffer is empty");
+            return;
+        }
+
+        self.add_undo(UndoType::Paste);
+
+        let cutbuf = self.cutbuffer.clone();
+        let tabsize = self.tabsize;
+        let buf = self.current_buffer_mut();
+        let current_idx = buf.current;
+        let current_x = buf.current_x;
+
+        if cutbuf.len() == 1 {
+            // Single-line paste: insert text at cursor
+            let text = &cutbuf[0].data;
+            buf.lines[current_idx].data.insert_str(current_x, text);
+            buf.current_x = current_x + text.len();
+        } else {
+            // Multi-line paste
+            let after_cursor = buf.lines[current_idx].data[current_x..].to_string();
+            buf.lines[current_idx].data.truncate(current_x);
+            buf.lines[current_idx].data.push_str(&cutbuf[0].data);
+
+            let mut insert_idx = current_idx + 1;
+            for i in 1..cutbuf.len() - 1 {
+                let line = Line::new(cutbuf[i].data.clone(), insert_idx + 1);
+                buf.lines.insert(insert_idx, line);
+                insert_idx += 1;
+            }
+
+            // Last cutbuffer line + after_cursor
+            let last = &cutbuf[cutbuf.len() - 1];
+            let final_x = last.data.len();
+            let final_line = Line::new(format!("{}{}", last.data, after_cursor), insert_idx + 1);
+            buf.lines.insert(insert_idx, final_line);
+
+            buf.current = insert_idx;
+            buf.current_x = final_x;
+            buf.renumber_from(current_idx);
+        }
+
+        buf.placewewant = chars::wideness(
+            &buf.lines[buf.current].data,
+            buf.current_x,
+            tabsize,
+        );
+
+        self.set_modified();
+        self.confirm_margin();
+        self.refresh_needed = true;
+    }
+}
