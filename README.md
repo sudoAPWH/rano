@@ -124,7 +124,7 @@ The codebase is organized into modules that mirror nano's source files:
 
 - **`Vec<Line>` instead of linked lists** — nano uses doubly-linked lists for lines; rano uses indexed vectors for cache-friendly access and simpler code.
 - **`Editor` struct instead of globals** — all mutable state lives in a single `Editor` struct rather than C-style global variables.
-- **crossterm instead of ncurses** — no C dependencies, works on macOS/Linux/Windows.
+- **crossterm instead of ncurses** — no C dependencies, works on macOS/Linux.
 - **`bitflags` for flags** — type-safe flag sets instead of `#define` bit masks.
 - **Cargo features mirror `#ifdef`** — nano's compile-time feature flags map to Cargo features.
 
