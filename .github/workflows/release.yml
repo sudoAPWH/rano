@@ -145,5 +145,5 @@ jobs:
             rano-linux-x86_64.tar.gz
             rano-macos-x86_64.tar.gz
             rano-macos-aarch64.tar.gz
-            *.deb
+            **/*.deb
             *.pkg.tar.zst
