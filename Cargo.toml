@@ -20,7 +20,7 @@ maintainer = "sudoAPWH"
 section = "editors"
 priority = "optional"
 assets = [
-    ["target/x86_64-unknown-linux-gnu/release/rano", "usr/bin/", "755"],
+    ["target/release/rano", "usr/bin/", "755"],
 ]
 
 [features]

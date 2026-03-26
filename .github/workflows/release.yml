@@ -90,25 +90,25 @@ jobs:
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-13
             name: macos-x86_64
           - target: aarch64-apple-darwin
-            os: macos-14
             name: macos-aarch64
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Create tarball
         run: |
-          cd target/release
-          tar czf ../../rano-${{ matrix.name }}.tar.gz rano
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../rano-${{ matrix.name }}.tar.gz rano
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
