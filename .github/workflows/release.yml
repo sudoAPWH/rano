@@ -39,7 +39,7 @@ jobs:
           name: linux-artifacts
           path: |
             rano-linux-x86_64.tar.gz
-            target/x86_64-unknown-linux-gnu/debian/*.deb
+            target/debian/*.deb
 
   build-arch:
     runs-on: ubuntu-latest
@@ -68,6 +68,7 @@ jobs:
           arch=('x86_64')
           license=('GPL')
           depends=('gcc-libs')
+          options=('!debug')
           source=("rano")
           sha256sums=('SKIP')
 
@@ -128,7 +129,18 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: |
+            Initial release of rano — a Rust rewrite of GNU nano.
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | Linux (generic) | `rano-linux-x86_64.tar.gz` |
+            | Debian/Ubuntu | `.deb` package |
+            | Arch Linux | `.pkg.tar.zst` package |
+            | macOS (Apple Silicon) | `rano-macos-aarch64.tar.gz` |
+            | macOS (Intel) | `rano-macos-x86_64.tar.gz` |
           files: |
             rano-linux-x86_64.tar.gz
             rano-macos-x86_64.tar.gz
