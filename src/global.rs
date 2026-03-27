@@ -41,6 +41,7 @@ pub fn build_func_table() -> Vec<FuncEntry> {
         (EditorFunction::DoRedo, "Redo", "Redo the last undone operation", Menu::MAIN),
         (EditorFunction::DoMark, "Set Mark", "Mark text starting from the cursor position", Menu::MAIN),
         (EditorFunction::CopyText, "Copy", "Copy current line (or marked region)", Menu::MAIN),
+        (EditorFunction::CopyOrPosition, "Copy/Position", "Copy selection to clipboard, or show cursor position", Menu::MAIN),
         (EditorFunction::DoIndent, "Indent", "Indent the current line (or marked lines)", Menu::MAIN),
         (EditorFunction::DoUnindent, "Unindent", "Unindent the current line (or marked lines)", Menu::MAIN),
         (EditorFunction::DoComment, "Comment", "Comment/uncomment the current line (or marked lines)", Menu::MAIN),
@@ -134,7 +135,6 @@ pub fn build_keybindings() -> Vec<KeyBinding> {
     bind!("^K", KeyCode::Ctrl('k'), Menu::MAIN, EditorFunction::CutText);
     bind!("^U", KeyCode::Ctrl('u'), Menu::MAIN, EditorFunction::PasteText);
     bind!("^T", KeyCode::Ctrl('t'), Menu::MAIN, EditorFunction::DoSpell);
-    bind!("^J", KeyCode::Ctrl('j'), Menu::MAIN, EditorFunction::DoJustify);
     bind!("^C", KeyCode::Ctrl('c'), Menu::MAIN, EditorFunction::CopyOrPosition);
     bind!("^_", KeyCode::Ctrl('_'), Menu::MAIN, EditorFunction::DoGotoLineColumn);
 

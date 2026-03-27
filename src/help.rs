@@ -87,6 +87,10 @@ impl Editor {
         let mut text = String::new();
 
         text.push_str(" rano help text\n\n");
+        text.push_str(" rano is a Rust-based text editor inspired by GNU nano.\n");
+        text.push_str(" Use the shortcuts below to navigate and edit files.\n");
+        text.push_str(" Mouse: click to move cursor, drag to select text.\n");
+        text.push_str(" Selections can be copied to the system clipboard with ^C.\n\n");
         text.push_str(" The main shortcuts are:\n\n");
 
         // List all bindings for the main menu.
@@ -104,8 +108,8 @@ impl Editor {
             }
         }
 
-        text.push_str("\n The editor is a Rust port of GNU nano.\n");
-        text.push_str(" For more information, see the nano documentation.\n");
+        text.push_str("\n Clipboard: ^C copies selection, ^K cuts, ^U pastes.\n");
+        text.push_str(" If the internal cutbuffer is empty, ^U pastes from the system clipboard.\n");
 
         text
     }
