@@ -30,18 +30,31 @@ impl Editor {
             None => return false,
         };
 
-        let (top, top_x, bot, bot_x) = if mark_line < buf.current
-            || (mark_line == buf.current && buf.mark_x <= buf.current_x)
-        {
-            (mark_line, buf.mark_x, buf.current, buf.current_x)
+        // For drag selections, the endpoint is drag_end; otherwise it's the cursor
+        let (end_line, end_x) = if buf.softmark {
+            if let Some(de) = buf.drag_end {
+                (de, buf.drag_end_x)
+            } else {
+                (buf.current, buf.current_x)
+            }
         } else {
-            (buf.current, buf.current_x, mark_line, buf.mark_x)
+            (buf.current, buf.current_x)
+        };
+
+        let (top, top_x, bot, bot_x) = if mark_line < end_line
+            || (mark_line == end_line && buf.mark_x <= end_x)
+        {
+            (mark_line, buf.mark_x, end_line, end_x)
+        } else {
+            (end_line, end_x, mark_line, buf.mark_x)
         };
 
         // Nothing selected
         if top == bot && top_x == bot_x {
-            self.current_buffer_mut().mark = None;
-            self.current_buffer_mut().softmark = false;
+            let buf = self.current_buffer_mut();
+            buf.mark = None;
+            buf.softmark = false;
+            buf.drag_end = None;
             return false;
         }
 
@@ -61,8 +74,6 @@ impl Editor {
             for i in top..=bot {
                 removed += self.buffers[self.current_buf].lines[i].data.len();
             }
-            // We kept top_x bytes from top line and (len - bot_x) from bot line
-            // Plus (bot - top) newlines removed
             let remaining = self.buffers[self.current_buf].lines[top].data.len();
 
             // Remove lines top+1..=bot
@@ -81,6 +92,7 @@ impl Editor {
         buf.current_x = top_x;
         buf.mark = None;
         buf.softmark = false;
+        buf.drag_end = None;
         buf.placewewant = chars::wideness(&buf.lines[top].data, top_x, tabsize);
 
         self.set_modified();

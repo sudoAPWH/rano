@@ -122,6 +122,9 @@ impl TermIO {
                             _ => continue,
                         }
                     }
+                    Event::Paste(text) => {
+                        return Ok(KeyCode::Special(SpecialKey::PastedText(text)));
+                    }
                     _ => continue,
                 }
             }
@@ -345,7 +348,7 @@ impl Editor {
     fn draw_titlebar(&mut self) -> io::Result<()> {
         self.tio.move_cursor(0, 0)?;
         let buf = &self.buffers[self.current_buf];
-        let version = "rano 0.1.1";
+        let version = "rano 0.1.2";
         let filename = if buf.filename.is_empty() {
             "New Buffer"
         } else {
@@ -376,12 +379,23 @@ impl Editor {
 
         // Determine selection range if mark is set
         let selection = if let Some(mark_line) = buf.mark {
-            let (top, top_x, bot, bot_x) = if mark_line < buf.current
-                || (mark_line == buf.current && buf.mark_x <= buf.current_x)
-            {
-                (mark_line, buf.mark_x, buf.current, buf.current_x)
+            // For drag selections, the endpoint is drag_end; otherwise it's the cursor
+            let (end_line, end_x) = if buf.softmark {
+                if let Some(de) = buf.drag_end {
+                    (de, buf.drag_end_x)
+                } else {
+                    (buf.current, buf.current_x)
+                }
             } else {
-                (buf.current, buf.current_x, mark_line, buf.mark_x)
+                (buf.current, buf.current_x)
+            };
+
+            let (top, top_x, bot, bot_x) = if mark_line < end_line
+                || (mark_line == end_line && buf.mark_x <= end_x)
+            {
+                (mark_line, buf.mark_x, end_line, end_x)
+            } else {
+                (end_line, end_x, mark_line, buf.mark_x)
             };
             Some((top, top_x, bot, bot_x))
         } else {
@@ -446,14 +460,40 @@ impl Editor {
                     Vec::new()
                 };
 
-                // Render the line character by character
+                // Compute horizontal scroll offset based on cursor column
+                let cursor_col = chars::wideness(
+                    &self.buffers[self.current_buf].lines[self.buffers[self.current_buf].current].data,
+                    self.buffers[self.current_buf].current_x,
+                    self.tabsize,
+                );
+                let page_start = crate::utils::get_page_start(cursor_col, self.editwincols);
+
+                // Render the line character by character with horizontal scrolling
                 let max_cols = self.editwincols;
-                let mut col = 0;
+                let mut col = 0; // display column of current char (absolute, not screen)
                 let mut byte_pos = 0;
+                let mut line_continues_right = false;
 
                 for c in line_data.chars() {
-                    if col >= max_cols {
+                    let char_w = if c == '\t' {
+                        self.tabsize - (col % self.tabsize)
+                    } else if c.is_control() {
+                        2
+                    } else {
+                        unicode_width::UnicodeWidthChar::width(c).unwrap_or(1)
+                    };
+
+                    // If this character ends beyond the viewport, the line continues right
+                    if col + char_w > page_start + max_cols {
+                        line_continues_right = true;
                         break;
+                    }
+
+                    // Skip characters that are entirely before the viewport
+                    if col + char_w <= page_start {
+                        col += char_w;
+                        byte_pos += c.len_utf8();
+                        continue;
                     }
 
                     // Check if in selection
@@ -465,7 +505,7 @@ impl Editor {
 
                     // Apply colors: selection overrides syntax
                     if in_selection {
-                        self.tio.set_colors(Color::Black, Color::White)?;
+                        queue!(self.tio.stdout, style::SetAttribute(Attribute::Reverse), style::SetAttribute(Attribute::Dim))?;
                     } else {
                         #[cfg(feature = "color")]
                         {
@@ -487,25 +527,18 @@ impl Editor {
 
                     // Render the character
                     if c == '\t' {
-                        let spaces = self.tabsize - (col % self.tabsize);
-                        let to_print = spaces.min(max_cols - col);
-                        self.tio.print_str(&" ".repeat(to_print))?;
-                        col += spaces;
+                        // A tab may be partially clipped on the left by page_start
+                        let visible_start = if col < page_start { page_start - col } else { 0 };
+                        let visible = char_w - visible_start;
+                        self.tio.print_str(&" ".repeat(visible))?;
                     } else if c.is_control() {
-                        if col + 2 <= max_cols {
-                            let rep = chars::control_rep(c);
-                            self.tio.print_str(&format!("^{}", rep))?;
-                            col += 2;
-                        }
+                        let rep = chars::control_rep(c);
+                        self.tio.print_str(&format!("^{}", rep))?;
                     } else {
-                        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-                        if col + w <= max_cols {
-                            self.tio.print_str(&c.to_string())?;
-                            col += w;
-                        } else {
-                            break;
-                        }
+                        self.tio.print_str(&c.to_string())?;
                     }
+
+                    col += char_w;
 
                     // Reset after colored char
                     if in_selection {
@@ -522,6 +555,28 @@ impl Editor {
                     }
 
                     byte_pos += c.len_utf8();
+                }
+
+                // Check if remaining characters extend beyond the viewport
+                if !line_continues_right && byte_pos < line_data.len() {
+                    line_continues_right = true;
+                }
+
+                // Draw ">" indicator at the right edge if line continues
+                if line_continues_right {
+                    // Move to the last column and draw the indicator
+                    self.tio.move_cursor((row + 1) as u16, (margin + max_cols - 1) as u16)?;
+                    queue!(self.tio.stdout, style::SetAttribute(Attribute::Reverse))?;
+                    self.tio.print_str(">")?;
+                    self.tio.reset_attrs()?;
+                }
+
+                // Draw "<" indicator at the left edge if viewport is scrolled right
+                if page_start > 0 {
+                    self.tio.move_cursor((row + 1) as u16, margin as u16)?;
+                    queue!(self.tio.stdout, style::SetAttribute(Attribute::Reverse))?;
+                    self.tio.print_str("<")?;
+                    self.tio.reset_attrs()?;
                 }
 
                 // Reset at end of line just in case
@@ -618,6 +673,14 @@ impl Editor {
     /// Place the cursor at the correct position.
     pub fn place_the_cursor(&mut self) -> io::Result<()> {
         let buf = &self.buffers[self.current_buf];
+
+        // Hide cursor when a drag selection is active
+        if buf.softmark && buf.drag_end.is_some() {
+            self.tio.hide_cursor()?;
+            self.tio.flush()?;
+            return Ok(());
+        }
+
         let col = chars::wideness(&buf.lines[buf.current].data, buf.current_x, self.tabsize);
 
         // Adjust edittop if cursor is off screen

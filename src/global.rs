@@ -135,7 +135,7 @@ pub fn build_keybindings() -> Vec<KeyBinding> {
     bind!("^U", KeyCode::Ctrl('u'), Menu::MAIN, EditorFunction::PasteText);
     bind!("^T", KeyCode::Ctrl('t'), Menu::MAIN, EditorFunction::DoSpell);
     bind!("^J", KeyCode::Ctrl('j'), Menu::MAIN, EditorFunction::DoJustify);
-    bind!("^C", KeyCode::Ctrl('c'), Menu::MAIN, EditorFunction::ReportCursorPosition);
+    bind!("^C", KeyCode::Ctrl('c'), Menu::MAIN, EditorFunction::CopyOrPosition);
     bind!("^_", KeyCode::Ctrl('_'), Menu::MAIN, EditorFunction::DoGotoLineColumn);
 
     // Movement keys
@@ -171,6 +171,7 @@ pub fn build_keybindings() -> Vec<KeyBinding> {
 
     // Undo/Redo
     bind!("M-U", KeyCode::Alt('u'), Menu::MAIN, EditorFunction::DoUndo);
+    bind!("^Z", KeyCode::Ctrl('z'), Menu::MAIN, EditorFunction::DoUndo);
     bind!("M-E", KeyCode::Alt('e'), Menu::MAIN, EditorFunction::DoRedo);
 
     // Mark, Copy
@@ -235,10 +236,10 @@ pub fn shown_entries_for(func_table: &[FuncEntry], menu: Menu) -> usize {
 }
 
 /// Look up the function bound to a given keycode in the current menu.
-pub fn func_from_key(keybindings: &[KeyBinding], keycode: KeyCode, menu: Menu) -> Option<EditorFunction> {
+pub fn func_from_key(keybindings: &[KeyBinding], keycode: &KeyCode, menu: Menu) -> Option<EditorFunction> {
     keybindings
         .iter()
-        .find(|k| k.keycode == keycode && k.menus.intersects(menu))
+        .find(|k| k.keycode == *keycode && k.menus.intersects(menu))
         .map(|k| k.func)
 }
 

@@ -296,7 +296,7 @@ bitflags! {
 
 // ── Custom key codes ───────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SpecialKey {
     ControlLeft,
     ControlRight,
@@ -350,6 +350,7 @@ pub enum SpecialKey {
     MouseScrollDown,
     MouseClick(u16, u16),
     MouseDrag(u16, u16),
+    PastedText(String),
 }
 
 // ── Core data structures ───────────────────────────────────────────────
@@ -483,6 +484,11 @@ pub struct OpenBuffer {
     pub mark: Option<usize>,        // line index where mark is set
     pub mark_x: usize,
     pub softmark: bool,
+    pub drag_end: Option<usize>,     // line index of drag selection endpoint
+    pub drag_end_x: usize,
+    pub saved_current: usize,        // cursor position saved before mouse drag
+    pub saved_current_x: usize,
+    pub saved_placewewant: usize,
     pub undo_stack: Vec<UndoItem>,
     pub undo_index: usize,          // points past the last valid undo
     pub last_action: Option<UndoType>,
@@ -513,6 +519,11 @@ impl OpenBuffer {
             mark: None,
             mark_x: 0,
             softmark: false,
+            drag_end: None,
+            drag_end_x: 0,
+            saved_current: 0,
+            saved_current_x: 0,
+            saved_placewewant: 0,
             undo_stack: Vec::new(),
             undo_index: 0,
             last_action: None,
@@ -662,6 +673,7 @@ pub enum EditorFunction {
     // Misc
     DoSuspend,
     ReportCursorPosition,
+    CopyOrPosition,
     DoCredits,
     CountLinesWordsAndCharacters,
     CompleteAWord,
@@ -704,7 +716,7 @@ pub struct RcOption {
 // ── Key representation ─────────────────────────────────────────────────
 
 /// Our unified key code representation, mapped from crossterm events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     Char(char),
     Ctrl(char),

@@ -153,10 +153,6 @@ pub fn actual_x(text: &str, column: usize, tabsize: usize) -> usize {
         let old_width = width;
         advance_over(c, &mut width, tabsize);
         if width > column {
-            // If we haven't moved at all, include at least one char
-            if old_width == 0 && byte_pos == 0 {
-                return c.len_utf8();
-            }
             return byte_pos;
         }
         byte_pos += c.len_utf8();

@@ -297,11 +297,35 @@ impl Editor {
                 self.refresh_needed = true;
                 return Ok(());
             }
+            KeyCode::Special(SpecialKey::WindowResized) => {
+                let (cols, rows) = terminal::size()?;
+                self.term_rows = rows as usize;
+                self.term_cols = cols as usize;
+                let help_rows = if self.flags.contains(EditorFlags::NO_HELP) { 0 } else { 2 };
+                self.editwinrows = self.term_rows.saturating_sub(2 + help_rows);
+                self.confirm_margin();
+                self.refresh_needed = true;
+                return Ok(());
+            }
+            KeyCode::Special(SpecialKey::PastedText(ref text)) => {
+                if !self.flags.contains(EditorFlags::VIEW_MODE) {
+                    let text = text.clone();
+                    self.delete_marked_region();
+                    for c in text.chars() {
+                        if c == '\n' || c == '\r' {
+                            self.do_enter();
+                        } else {
+                            self.do_char(c);
+                        }
+                    }
+                }
+                return Ok(());
+            }
             _ => {}
         }
 
         // Check if it's a bound function
-        if let Some(func) = global::func_from_key(&self.keybindings, keycode, self.currmenu) {
+        if let Some(func) = global::func_from_key(&self.keybindings, &keycode, self.currmenu) {
             self.execute_function(func)?;
             return Ok(());
         }
@@ -340,36 +364,52 @@ impl Editor {
         (line_index, byte_x)
     }
 
-    /// Handle a mouse click: move cursor to clicked position, clear selection.
+    /// Handle a mouse click: dismiss selection (restore cursor) or move cursor.
     fn handle_mouse_click(&mut self, col: u16, row: u16) {
         // Only handle clicks in the edit area (row > 0)
         if row == 0 {
             return;
         }
 
-        // Clear any existing selection
         let buf = self.current_buffer_mut();
-        buf.mark = None;
-        buf.softmark = false;
+        if buf.softmark && buf.drag_end.is_some() {
+            // Dismiss a drag selection — restore cursor to pre-drag position
+            buf.mark = None;
+            buf.softmark = false;
+            buf.drag_end = None;
+            buf.current = buf.saved_current;
+            buf.current_x = buf.saved_current_x;
+            buf.placewewant = buf.saved_placewewant;
+        } else {
+            // Normal click — save cursor position first (in case a drag follows),
+            // then clear any selection and move cursor
+            buf.saved_current = buf.current;
+            buf.saved_current_x = buf.current_x;
+            buf.saved_placewewant = buf.placewewant;
+            buf.mark = None;
+            buf.softmark = false;
+            buf.drag_end = None;
 
-        let (line_index, byte_x) = self.screen_to_buffer_pos(col, row);
+            let (line_index, byte_x) = self.screen_to_buffer_pos(col, row);
 
-        let tabsize = self.tabsize;
-        let buf = self.current_buffer_mut();
-        buf.current = line_index;
-        buf.current_x = byte_x;
-        buf.placewewant = chars::wideness(&buf.lines[line_index].data, byte_x, tabsize);
+            let tabsize = self.tabsize;
+            let buf = self.current_buffer_mut();
+            buf.current = line_index;
+            buf.current_x = byte_x;
+            buf.placewewant = chars::wideness(&buf.lines[line_index].data, byte_x, tabsize);
+        }
     }
 
-    /// Handle a mouse drag: set/extend selection to dragged position.
+    /// Handle a mouse drag: set/extend selection without moving the real cursor.
     fn handle_mouse_drag(&mut self, col: u16, row: u16) {
         if row == 0 {
             return;
         }
 
-        // If no mark is set, set it at the current cursor position (start of drag)
         let buf = self.current_buffer_mut();
         if buf.mark.is_none() {
+            // First drag event — set mark at click position (where cursor already moved).
+            // saved_current was already set by the preceding handle_mouse_click.
             buf.mark = Some(buf.current);
             buf.mark_x = buf.current_x;
             buf.softmark = true;
@@ -377,11 +417,9 @@ impl Editor {
 
         let (line_index, byte_x) = self.screen_to_buffer_pos(col, row);
 
-        let tabsize = self.tabsize;
         let buf = self.current_buffer_mut();
-        buf.current = line_index;
-        buf.current_x = byte_x;
-        buf.placewewant = chars::wideness(&buf.lines[line_index].data, byte_x, tabsize);
+        buf.drag_end = Some(line_index);
+        buf.drag_end_x = byte_x;
     }
 
     /// Execute an editor function.
@@ -445,6 +483,16 @@ impl Editor {
 
             // Report position
             EditorFunction::ReportCursorPosition => self.report_cursor_position(),
+
+            // Copy if selected, otherwise report cursor position
+            EditorFunction::CopyOrPosition => {
+                let has_mark = self.current_buffer().mark.is_some();
+                if has_mark {
+                    self.copy_text();
+                } else {
+                    self.report_cursor_position();
+                }
+            }
 
             // Suspend
             EditorFunction::DoSuspend => self.do_suspend()?,

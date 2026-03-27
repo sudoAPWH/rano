@@ -21,6 +21,55 @@ use crate::chars;
 use crate::definitions::*;
 use crate::editor::Editor;
 
+use std::process::{Command, Stdio};
+use std::io::Write as IoWrite;
+
+/// Copy text to the system clipboard.
+fn clipboard_copy(text: &str) {
+    #[cfg(target_os = "macos")]
+    let result = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(text.as_bytes())?;
+            }
+            child.wait()
+        });
+
+    #[cfg(not(target_os = "macos"))]
+    let result = Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(text.as_bytes())?;
+            }
+            child.wait()
+        });
+
+    let _ = result;
+}
+
+/// Read text from the system clipboard.
+fn clipboard_paste() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let output = Command::new("pbpaste").output().ok()?;
+
+    #[cfg(not(target_os = "macos"))]
+    let output = Command::new("xclip")
+        .args(["-selection", "clipboard", "-o"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout).ok()
+    } else {
+        None
+    }
+}
+
 impl Editor {
     /// Cut the current line (or marked region) into the cutbuffer.
     pub fn cut_text(&mut self) {
@@ -42,17 +91,29 @@ impl Editor {
 
         let buf = &self.buffers[self.current_buf];
         if let Some(mark_line) = buf.mark {
-            // Cut the marked region
-            let (top, top_x, bot, bot_x) = if mark_line < buf.current
-                || (mark_line == buf.current && buf.mark_x <= buf.current_x)
-            {
-                (mark_line, buf.mark_x, buf.current, buf.current_x)
+            // For drag selections, the endpoint is drag_end; otherwise it's the cursor
+            let (end_line, end_x) = if buf.softmark {
+                if let Some(de) = buf.drag_end {
+                    (de, buf.drag_end_x)
+                } else {
+                    (buf.current, buf.current_x)
+                }
             } else {
-                (buf.current, buf.current_x, mark_line, buf.mark_x)
+                (buf.current, buf.current_x)
+            };
+
+            let (top, top_x, bot, bot_x) = if mark_line < end_line
+                || (mark_line == end_line && buf.mark_x <= end_x)
+            {
+                (mark_line, buf.mark_x, end_line, end_x)
+            } else {
+                (end_line, end_x, mark_line, buf.mark_x)
             };
 
             self.cut_region(top, top_x, bot, bot_x);
-            self.current_buffer_mut().mark = None;
+            let buf = self.current_buffer_mut();
+            buf.mark = None;
+            buf.drag_end = None;
             self.keep_cutbuffer = false;
         } else {
             // Cut the entire current line
@@ -79,6 +140,10 @@ impl Editor {
             self.current_buffer_mut().renumber_from(current);
             self.keep_cutbuffer = true;
         }
+
+        // Also copy to system clipboard
+        let clipboard_text = self.cutbuffer_to_string();
+        clipboard_copy(&clipboard_text);
 
         self.set_modified();
         self.confirm_margin();
@@ -132,12 +197,23 @@ impl Editor {
         let buf = &self.buffers[self.current_buf];
 
         if let Some(mark_line) = buf.mark {
-            let (top, top_x, bot, bot_x) = if mark_line < buf.current
-                || (mark_line == buf.current && buf.mark_x <= buf.current_x)
-            {
-                (mark_line, buf.mark_x, buf.current, buf.current_x)
+            // For drag selections, the endpoint is drag_end; otherwise it's the cursor
+            let (end_line, end_x) = if buf.softmark {
+                if let Some(de) = buf.drag_end {
+                    (de, buf.drag_end_x)
+                } else {
+                    (buf.current, buf.current_x)
+                }
             } else {
-                (buf.current, buf.current_x, mark_line, buf.mark_x)
+                (buf.current, buf.current_x)
+            };
+
+            let (top, top_x, bot, bot_x) = if mark_line < end_line
+                || (mark_line == end_line && buf.mark_x <= end_x)
+            {
+                (mark_line, buf.mark_x, end_line, end_x)
+            } else {
+                (end_line, end_x, mark_line, buf.mark_x)
             };
 
             if top == bot && top_x == bot_x {
@@ -157,7 +233,9 @@ impl Editor {
                 self.cutbuffer.push(Line::new(buf.lines[bot].data[..bot_x].to_string(), 0));
             }
 
-            self.current_buffer_mut().mark = None;
+            let buf = self.current_buffer_mut();
+            buf.mark = None;
+            buf.drag_end = None;
         } else {
             // Copy the current line
             let current = buf.current;
@@ -165,8 +243,24 @@ impl Editor {
             self.cutbuffer.push(Line::new(String::new(), 0));
         }
 
+        // Also copy to system clipboard
+        let clipboard_text = self.cutbuffer_to_string();
+        clipboard_copy(&clipboard_text);
+
         self.statusline(MessageType::Info, "Copied text");
         self.refresh_needed = true;
+    }
+
+    /// Convert the cutbuffer to a single string for clipboard use.
+    fn cutbuffer_to_string(&self) -> String {
+        let mut result = String::new();
+        for (i, line) in self.cutbuffer.iter().enumerate() {
+            if i > 0 {
+                result.push('\n');
+            }
+            result.push_str(&line.data);
+        }
+        result
     }
 
     /// Paste the cutbuffer contents at the cursor position.
@@ -174,6 +268,20 @@ impl Editor {
         if self.flags.contains(EditorFlags::VIEW_MODE) {
             self.statusline(MessageType::Ahem, "Key invalid in view mode");
             return;
+        }
+
+        // If internal cutbuffer is empty, try system clipboard
+        if self.cutbuffer.is_empty() {
+            if let Some(text) = clipboard_paste() {
+                if !text.is_empty() {
+                    self.cutbuffer.clear();
+                    let mut lineno = 0;
+                    for line_str in text.split('\n') {
+                        self.cutbuffer.push(Line::new(line_str.to_string(), lineno));
+                        lineno += 1;
+                    }
+                }
+            }
         }
 
         if self.cutbuffer.is_empty() {
