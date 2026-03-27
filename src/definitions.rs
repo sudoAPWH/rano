@@ -348,6 +348,8 @@ pub enum SpecialKey {
     KeyFresh,
     MouseScrollUp,
     MouseScrollDown,
+    MouseClick(u16, u16),
+    MouseDrag(u16, u16),
 }
 
 // ── Core data structures ───────────────────────────────────────────────

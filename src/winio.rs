@@ -107,6 +107,18 @@ impl TermIO {
                             MouseEventKind::ScrollDown => {
                                 return Ok(KeyCode::Special(SpecialKey::MouseScrollDown));
                             }
+                            MouseEventKind::Down(event::MouseButton::Left) => {
+                                return Ok(KeyCode::Special(SpecialKey::MouseClick(
+                                    mouse_event.column,
+                                    mouse_event.row,
+                                )));
+                            }
+                            MouseEventKind::Drag(event::MouseButton::Left) => {
+                                return Ok(KeyCode::Special(SpecialKey::MouseDrag(
+                                    mouse_event.column,
+                                    mouse_event.row,
+                                )));
+                            }
                             _ => continue,
                         }
                     }
@@ -357,34 +369,116 @@ impl Editor {
     fn draw_edit_window(&mut self) -> io::Result<()> {
         let buf = &self.buffers[self.current_buf];
         let show_line_nums = self.flags.contains(EditorFlags::LINE_NUMBERS);
+        let edittop = buf.edittop;
+        let editwinrows = self.editwinrows;
+        let margin = self.margin;
+        let num_lines = buf.lines.len();
 
-        for row in 0..self.editwinrows {
-            let line_index = buf.edittop + row;
+        // Determine selection range if mark is set
+        let selection = if let Some(mark_line) = buf.mark {
+            let (top, top_x, bot, bot_x) = if mark_line < buf.current
+                || (mark_line == buf.current && buf.mark_x <= buf.current_x)
+            {
+                (mark_line, buf.mark_x, buf.current, buf.current_x)
+            } else {
+                (buf.current, buf.current_x, mark_line, buf.mark_x)
+            };
+            Some((top, top_x, bot, bot_x))
+        } else {
+            None
+        };
+
+        for row in 0..editwinrows {
+            let line_index = edittop + row;
             self.tio.move_cursor((row + 1) as u16, 0)?;
             self.tio.clear_to_eol()?;
 
-            if line_index < buf.lines.len() {
-                let line = &buf.lines[line_index];
-
+            if line_index < num_lines {
                 // Draw line number
                 if show_line_nums {
-                    let num_str = format!("{:>width$} ", line.lineno, width = self.margin - 1);
+                    let lineno = self.buffers[self.current_buf].lines[line_index].lineno;
+                    let num_str = format!("{:>width$} ", lineno, width = margin - 1);
                     self.tio.set_colors(Color::DarkYellow, Color::Reset)?;
                     self.tio.print_str(&num_str)?;
                     self.tio.reset_attrs()?;
                 }
 
-                // Draw the line content
-                let display = self.make_display_string(&line.data, self.editwincols);
-                self.tio.print_str(&display)?;
+                // Draw the line content, with selection highlighting
+                let line_data = self.buffers[self.current_buf].lines[line_index].data.clone();
+                if let Some((top, top_x, bot, bot_x)) = selection {
+                    if line_index >= top && line_index <= bot {
+                        let sel_start = if line_index == top { top_x } else { 0 };
+                        let sel_end = if line_index == bot { bot_x } else { line_data.len() };
+                        self.draw_line_with_selection(&line_data, sel_start, sel_end)?;
+                    } else {
+                        let display = self.make_display_string(&line_data, self.editwincols);
+                        self.tio.print_str(&display)?;
+                    }
+                } else {
+                    let display = self.make_display_string(&line_data, self.editwincols);
+                    self.tio.print_str(&display)?;
+                }
             } else {
                 // Past end of file: draw empty or tilde
                 if show_line_nums {
-                    let blank = format!("{:>width$} ", "", width = self.margin - 1);
+                    let blank = format!("{:>width$} ", "", width = margin - 1);
                     self.tio.print_str(&blank)?;
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Draw a single line with a highlighted selection region.
+    fn draw_line_with_selection(&mut self, data: &str, sel_start: usize, sel_end: usize) -> io::Result<()> {
+        let max_cols = self.editwincols;
+        let mut col = 0;
+        let mut byte_pos = 0;
+
+        for c in data.chars() {
+            if col >= max_cols {
+                break;
+            }
+
+            let in_selection = byte_pos >= sel_start && byte_pos < sel_end;
+
+            if in_selection {
+                self.tio.set_colors(Color::Black, Color::White)?;
+            }
+
+            if c == '\t' {
+                let spaces = self.tabsize - (col % self.tabsize);
+                let to_print = spaces.min(max_cols - col);
+                self.tio.print_str(&" ".repeat(to_print))?;
+                col += spaces;
+            } else if c.is_control() {
+                if col + 2 <= max_cols {
+                    let rep = chars::control_rep(c);
+                    self.tio.print_str(&format!("^{}", rep))?;
+                    col += 2;
+                }
+            } else {
+                let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+                if col + w <= max_cols {
+                    self.tio.print_str(&c.to_string())?;
+                    col += w;
+                } else {
+                    break;
+                }
+            }
+
+            if in_selection {
+                self.tio.reset_attrs()?;
+            }
+
+            byte_pos += c.len_utf8();
+        }
+
+        // If selection extends to end of line, show a highlighted space for the "newline"
+        if sel_end > data.len() || (sel_end == data.len() && sel_start < sel_end && byte_pos <= sel_end) {
+            // no trailing space needed for now
+        }
+
         Ok(())
     }
 

@@ -20,6 +20,7 @@
 use crate::chars;
 use crate::definitions::*;
 use crate::global;
+use crate::utils;
 use crate::winio;
 
 use crossterm::terminal;
@@ -271,6 +272,16 @@ impl Editor {
                 self.refresh_needed = true;
                 return Ok(());
             }
+            KeyCode::Special(SpecialKey::MouseClick(col, row)) => {
+                self.handle_mouse_click(col, row);
+                self.refresh_needed = true;
+                return Ok(());
+            }
+            KeyCode::Special(SpecialKey::MouseDrag(col, row)) => {
+                self.handle_mouse_drag(col, row);
+                self.refresh_needed = true;
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -290,6 +301,72 @@ impl Editor {
         }
 
         Ok(())
+    }
+
+    /// Convert screen coordinates to buffer position and move cursor there.
+    fn screen_to_buffer_pos(&self, col: u16, row: u16) -> (usize, usize) {
+        let buf = &self.buffers[self.current_buf];
+
+        // Row 0 is the title bar, so edit area starts at row 1
+        let edit_row = (row as usize).saturating_sub(1);
+        let line_index = (buf.edittop + edit_row).min(buf.lines.len() - 1);
+
+        // Subtract margin (line numbers) to get the column within the text
+        let text_col = (col as usize).saturating_sub(self.margin);
+
+        // Account for horizontal scrolling
+        let current_col = chars::wideness(&buf.lines[line_index].data, buf.current_x, self.tabsize);
+        let page_start = utils::get_page_start(current_col, self.editwincols);
+        let display_col = text_col + page_start;
+
+        // Convert display column to byte position
+        let byte_x = chars::actual_x(&buf.lines[line_index].data, display_col, self.tabsize);
+
+        (line_index, byte_x)
+    }
+
+    /// Handle a mouse click: move cursor to clicked position, clear selection.
+    fn handle_mouse_click(&mut self, col: u16, row: u16) {
+        // Only handle clicks in the edit area (row > 0)
+        if row == 0 {
+            return;
+        }
+
+        // Clear any existing selection
+        let buf = self.current_buffer_mut();
+        buf.mark = None;
+        buf.softmark = false;
+
+        let (line_index, byte_x) = self.screen_to_buffer_pos(col, row);
+
+        let tabsize = self.tabsize;
+        let buf = self.current_buffer_mut();
+        buf.current = line_index;
+        buf.current_x = byte_x;
+        buf.placewewant = chars::wideness(&buf.lines[line_index].data, byte_x, tabsize);
+    }
+
+    /// Handle a mouse drag: set/extend selection to dragged position.
+    fn handle_mouse_drag(&mut self, col: u16, row: u16) {
+        if row == 0 {
+            return;
+        }
+
+        // If no mark is set, set it at the current cursor position (start of drag)
+        let buf = self.current_buffer_mut();
+        if buf.mark.is_none() {
+            buf.mark = Some(buf.current);
+            buf.mark_x = buf.current_x;
+            buf.softmark = true;
+        }
+
+        let (line_index, byte_x) = self.screen_to_buffer_pos(col, row);
+
+        let tabsize = self.tabsize;
+        let buf = self.current_buffer_mut();
+        buf.current = line_index;
+        buf.current_x = byte_x;
+        buf.placewewant = chars::wideness(&buf.lines[line_index].data, byte_x, tabsize);
     }
 
     /// Execute an editor function.

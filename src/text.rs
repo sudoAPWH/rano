@@ -22,12 +22,82 @@ use crate::definitions::*;
 use crate::editor::Editor;
 
 impl Editor {
+    /// Delete the marked region (selection) and return true, or return false if no mark.
+    pub fn delete_marked_region(&mut self) -> bool {
+        let buf = &self.buffers[self.current_buf];
+        let mark_line = match buf.mark {
+            Some(m) => m,
+            None => return false,
+        };
+
+        let (top, top_x, bot, bot_x) = if mark_line < buf.current
+            || (mark_line == buf.current && buf.mark_x <= buf.current_x)
+        {
+            (mark_line, buf.mark_x, buf.current, buf.current_x)
+        } else {
+            (buf.current, buf.current_x, mark_line, buf.mark_x)
+        };
+
+        // Nothing selected
+        if top == bot && top_x == bot_x {
+            self.current_buffer_mut().mark = None;
+            self.current_buffer_mut().softmark = false;
+            return false;
+        }
+
+        // Delete the region
+        if top == bot {
+            let removed = bot_x - top_x;
+            self.buffers[self.current_buf].lines[top].data.drain(top_x..bot_x);
+            self.buffers[self.current_buf].totsize -= removed;
+        } else {
+            // Merge: keep top line up to top_x, append bot line from bot_x onward
+            let after_bot = self.buffers[self.current_buf].lines[bot].data[bot_x..].to_string();
+            self.buffers[self.current_buf].lines[top].data.truncate(top_x);
+            self.buffers[self.current_buf].lines[top].data.push_str(&after_bot);
+
+            // Calculate removed bytes
+            let mut removed = 0;
+            for i in top..=bot {
+                removed += self.buffers[self.current_buf].lines[i].data.len();
+            }
+            // We kept top_x bytes from top line and (len - bot_x) from bot line
+            // Plus (bot - top) newlines removed
+            let remaining = self.buffers[self.current_buf].lines[top].data.len();
+
+            // Remove lines top+1..=bot
+            for _ in (top + 1)..=bot {
+                self.buffers[self.current_buf].lines.remove(top + 1);
+            }
+
+            self.buffers[self.current_buf].totsize = self.buffers[self.current_buf].totsize
+                .saturating_sub(removed - remaining + (bot - top));
+            self.buffers[self.current_buf].renumber_from(top);
+        }
+
+        let tabsize = self.tabsize;
+        let buf = self.current_buffer_mut();
+        buf.current = top;
+        buf.current_x = top_x;
+        buf.mark = None;
+        buf.softmark = false;
+        buf.placewewant = chars::wideness(&buf.lines[top].data, top_x, tabsize);
+
+        self.set_modified();
+        self.confirm_margin();
+        self.refresh_needed = true;
+        true
+    }
+
     /// Insert a single character at the cursor position.
     pub fn do_char(&mut self, c: char) {
         if self.flags.contains(EditorFlags::VIEW_MODE) {
             self.statusline(MessageType::Ahem, "Key invalid in view mode");
             return;
         }
+
+        // If there's a selection, delete it first
+        self.delete_marked_region();
 
         self.add_undo(UndoType::Add);
 
@@ -72,6 +142,9 @@ impl Editor {
             self.statusline(MessageType::Ahem, "Key invalid in view mode");
             return;
         }
+
+        // If there's a selection, delete it first
+        self.delete_marked_region();
 
         self.add_undo(UndoType::Enter);
 
@@ -127,6 +200,11 @@ impl Editor {
             return;
         }
 
+        // If there's a selection, delete it instead
+        if self.delete_marked_region() {
+            return;
+        }
+
         let buf = self.current_buffer();
         let line_len = buf.lines[buf.current].data.len();
 
@@ -159,6 +237,11 @@ impl Editor {
     pub fn do_backspace(&mut self) {
         if self.flags.contains(EditorFlags::VIEW_MODE) {
             self.statusline(MessageType::Ahem, "Key invalid in view mode");
+            return;
+        }
+
+        // If there's a selection, delete it instead
+        if self.delete_marked_region() {
             return;
         }
 
