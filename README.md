@@ -19,7 +19,7 @@ rano is a terminal text editor that aims to replicate the behavior and feel of G
 - **Backup files** — optional backup on save
 - **Help viewer** — built-in keybinding reference (`^G`)
 - **RC file support** — reads `.nanorc` configuration
-- **Syntax highlighting** — framework in place (behind feature flag)
+- **Syntax highlighting** — uses nano-compatible `.nanorc` syntax files (40+ languages)
 - **File browser** — directory navigation (behind feature flag)
 - **Search/position history** — persistent across sessions (behind feature flag)
 
@@ -93,6 +93,19 @@ rano -E -T 4 file.txt   # Use 4 spaces instead of tabs
 -I, --ignorercfiles     Skip .nanorc files
 -Y, --syntax <NAME>     Force a syntax definition
 ```
+
+## Syntax Highlighting
+
+rano reads nano's `.nanorc` syntax definition files for highlighting. It automatically searches for them in:
+
+- `~/.nanorc` (user config with `include` directives)
+- `/usr/share/nano/`
+- `/usr/local/share/nano/`
+- `/opt/homebrew/share/nano/` (macOS Homebrew)
+
+If you have GNU nano installed, syntax highlighting should work out of the box. On macOS: `brew install nano`. On Debian/Ubuntu: `apt install nano`.
+
+Supported languages include: Rust, C/C++, Python, JavaScript, Go, Java, Ruby, PHP, Shell, HTML, CSS, JSON, YAML, Markdown, SQL, and many more.
 
 ## Architecture
 

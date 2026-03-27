@@ -164,6 +164,11 @@ impl Editor {
             replace_history: Vec::new(),
         };
 
+        // Load RC files (syntax definitions, settings)
+        if !args.ignore_rcfiles {
+            editor.do_rcfiles();
+        }
+
         // Open files from args, or create an empty buffer
         if args.files.is_empty() {
             editor.make_new_buffer();
@@ -171,6 +176,16 @@ impl Editor {
             for filename in &args.files {
                 editor.open_buffer(filename)?;
             }
+        }
+
+        // Apply syntax highlighting to all open buffers
+        #[cfg(feature = "color")]
+        {
+            for i in 0..editor.buffers.len() {
+                editor.current_buf = i;
+                editor.find_and_apply_syntax();
+            }
+            editor.current_buf = 0;
         }
 
         // Handle +line,col

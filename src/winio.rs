@@ -34,7 +34,7 @@ use std::time::Duration;
 
 /// Terminal I/O handler.
 pub struct TermIO {
-    stdout: Stdout,
+    pub stdout: Stdout,
     in_raw_mode: bool,
 }
 
@@ -388,6 +388,10 @@ impl Editor {
             None
         };
 
+        // Get syntax color spans for visible lines
+        #[cfg(feature = "color")]
+        let syntax_idx = self.buffers[self.current_buf].syntax;
+
         for row in 0..editwinrows {
             let line_index = edittop + row;
             self.tio.move_cursor((row + 1) as u16, 0)?;
@@ -403,21 +407,125 @@ impl Editor {
                     self.tio.reset_attrs()?;
                 }
 
-                // Draw the line content, with selection highlighting
                 let line_data = self.buffers[self.current_buf].lines[line_index].data.clone();
-                if let Some((top, top_x, bot, bot_x)) = selection {
+
+                // Compute selection bounds for this line
+                let line_sel = if let Some((top, top_x, bot, bot_x)) = selection {
                     if line_index >= top && line_index <= bot {
                         let sel_start = if line_index == top { top_x } else { 0 };
                         let sel_end = if line_index == bot { bot_x } else { line_data.len() };
-                        self.draw_line_with_selection(&line_data, sel_start, sel_end)?;
+                        Some((sel_start, sel_end))
                     } else {
-                        let display = self.make_display_string(&line_data, self.editwincols);
-                        self.tio.print_str(&display)?;
+                        None
                     }
                 } else {
-                    let display = self.make_display_string(&line_data, self.editwincols);
-                    self.tio.print_str(&display)?;
+                    None
+                };
+
+                // Compute syntax color spans for this line
+                #[cfg(feature = "color")]
+                let color_spans = if let Some(si) = syntax_idx {
+                    self.color_line(&line_data, si)
+                } else {
+                    Vec::new()
+                };
+                #[cfg(not(feature = "color"))]
+                let color_spans: Vec<(usize, usize, usize)> = Vec::new();
+
+                // Build per-byte color map: for each byte, which syntax rule applies (last wins)
+                #[cfg(feature = "color")]
+                let syntax_colors: Vec<Option<usize>> = if !color_spans.is_empty() {
+                    let mut map = vec![None; line_data.len()];
+                    for &(start, end, rule_idx) in &color_spans {
+                        for i in start..end.min(line_data.len()) {
+                            map[i] = Some(rule_idx);
+                        }
+                    }
+                    map
+                } else {
+                    Vec::new()
+                };
+
+                // Render the line character by character
+                let max_cols = self.editwincols;
+                let mut col = 0;
+                let mut byte_pos = 0;
+
+                for c in line_data.chars() {
+                    if col >= max_cols {
+                        break;
+                    }
+
+                    // Check if in selection
+                    let in_selection = if let Some((sel_start, sel_end)) = line_sel {
+                        byte_pos >= sel_start && byte_pos < sel_end
+                    } else {
+                        false
+                    };
+
+                    // Apply colors: selection overrides syntax
+                    if in_selection {
+                        self.tio.set_colors(Color::Black, Color::White)?;
+                    } else {
+                        #[cfg(feature = "color")]
+                        {
+                            if !syntax_colors.is_empty() {
+                                if let Some(Some(rule_idx)) = syntax_colors.get(byte_pos) {
+                                    if let Some(si) = syntax_idx {
+                                        let rule = &self.syntaxes[si].colors[*rule_idx];
+                                        let fg = Self::resolve_color(rule.fg);
+                                        let bg = Self::resolve_color(rule.bg);
+                                        self.tio.set_colors(fg, bg)?;
+                                        if rule.attributes.has(crossterm::style::Attribute::Bold) {
+                                            queue!(self.tio.stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::Bold))?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Render the character
+                    if c == '\t' {
+                        let spaces = self.tabsize - (col % self.tabsize);
+                        let to_print = spaces.min(max_cols - col);
+                        self.tio.print_str(&" ".repeat(to_print))?;
+                        col += spaces;
+                    } else if c.is_control() {
+                        if col + 2 <= max_cols {
+                            let rep = chars::control_rep(c);
+                            self.tio.print_str(&format!("^{}", rep))?;
+                            col += 2;
+                        }
+                    } else {
+                        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+                        if col + w <= max_cols {
+                            self.tio.print_str(&c.to_string())?;
+                            col += w;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Reset after colored char
+                    if in_selection {
+                        self.tio.reset_attrs()?;
+                    } else {
+                        #[cfg(feature = "color")]
+                        {
+                            if !syntax_colors.is_empty() {
+                                if syntax_colors.get(byte_pos).copied().flatten().is_some() {
+                                    self.tio.reset_attrs()?;
+                                }
+                            }
+                        }
+                    }
+
+                    byte_pos += c.len_utf8();
                 }
+
+                // Reset at end of line just in case
+                self.tio.reset_attrs()?;
             } else {
                 // Past end of file: draw empty or tilde
                 if show_line_nums {
@@ -426,59 +534,6 @@ impl Editor {
                 }
             }
         }
-        Ok(())
-    }
-
-    /// Draw a single line with a highlighted selection region.
-    fn draw_line_with_selection(&mut self, data: &str, sel_start: usize, sel_end: usize) -> io::Result<()> {
-        let max_cols = self.editwincols;
-        let mut col = 0;
-        let mut byte_pos = 0;
-
-        for c in data.chars() {
-            if col >= max_cols {
-                break;
-            }
-
-            let in_selection = byte_pos >= sel_start && byte_pos < sel_end;
-
-            if in_selection {
-                self.tio.set_colors(Color::Black, Color::White)?;
-            }
-
-            if c == '\t' {
-                let spaces = self.tabsize - (col % self.tabsize);
-                let to_print = spaces.min(max_cols - col);
-                self.tio.print_str(&" ".repeat(to_print))?;
-                col += spaces;
-            } else if c.is_control() {
-                if col + 2 <= max_cols {
-                    let rep = chars::control_rep(c);
-                    self.tio.print_str(&format!("^{}", rep))?;
-                    col += 2;
-                }
-            } else {
-                let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-                if col + w <= max_cols {
-                    self.tio.print_str(&c.to_string())?;
-                    col += w;
-                } else {
-                    break;
-                }
-            }
-
-            if in_selection {
-                self.tio.reset_attrs()?;
-            }
-
-            byte_pos += c.len_utf8();
-        }
-
-        // If selection extends to end of line, show a highlighted space for the "newline"
-        if sel_end > data.len() || (sel_end == data.len() && sel_start < sel_end && byte_pos <= sel_end) {
-            // no trailing space needed for now
-        }
-
         Ok(())
     }
 
