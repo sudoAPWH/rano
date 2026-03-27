@@ -345,7 +345,7 @@ impl Editor {
     fn draw_titlebar(&mut self) -> io::Result<()> {
         self.tio.move_cursor(0, 0)?;
         let buf = &self.buffers[self.current_buf];
-        let version = "rano 0.1.0";
+        let version = "rano 0.1.1";
         let filename = if buf.filename.is_empty() {
             "New Buffer"
         } else {

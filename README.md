@@ -14,7 +14,7 @@ rano is a terminal text editor that aims to replicate the behavior and feel of G
 - **Go to line/column** — jump to any position in the file
 - **Undo/redo** — full undo history
 - **Multiple buffers** — open and switch between files
-- **Mouse scroll** — scroll wheel support out of the box
+- **Mouse support** — click to position cursor, drag to select, scroll wheel
 - **File format detection** — Unix, DOS, and Mac line endings
 - **Backup files** — optional backup on save
 - **Help viewer** — built-in keybinding reference (`^G`)

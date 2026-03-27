@@ -1,6 +1,6 @@
 [package]
 name = "rano"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A Rust rewrite of GNU nano - a small and user-friendly text editor"
 
