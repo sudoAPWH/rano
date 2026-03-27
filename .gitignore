@@ -4,6 +4,9 @@
 # Rust build artifacts
 /target/
 
+# Claude Code
+.claude/
+
 # IDE
 .idea/
 .vscode/
